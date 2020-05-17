@@ -8,15 +8,17 @@
 )]
 
 mod atomics;
-mod counter;
+pub mod counter;
 mod error;
-mod gauge;
-mod histogram;
+pub mod gauge;
+pub mod histogram;
 mod label;
+mod registry;
 mod timer;
 
+pub use atomics::AtomicF64;
 pub use counter::{Counter, FloatCounter, IntCounter, UintCounter};
 pub use error::{PromError, PromErrorKind};
 pub use gauge::{FloatGauge, Gauge, IntGauge, UintGauge};
-pub use histogram::{Histogram, HistogramBuilder, LocalHistogram, DEFAULT_BUCKETS};
+pub use registry::{Registry, RegistryBuilder};
 pub use timer::Timer;

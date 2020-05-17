@@ -1,7 +1,8 @@
 use crate::{
     atomics::{AtomicF64, AtomicNum},
     error::Result,
-    label::{Label, Labeled},
+    label::Label,
+    registry::{Collectable, Descriptor, MetricValue},
 };
 use std::{
     borrow::Cow,
@@ -36,19 +37,17 @@ pub type FloatCounter = Counter<AtomicF64>;
 /// [docs]: https://prometheus.io/docs/concepts/metric_types/#counter
 /// [gauge]: crate::Gauge
 #[derive(Debug)]
-#[repr(transparent)]
 pub struct Counter<Atomic: AtomicNum = AtomicU64> {
     /// The inner atomically manipulated value
-    value: Labeled<Atomic>,
+    value: Atomic,
+    descriptor: Descriptor,
 }
 
 impl<Atomic: AtomicNum> Counter<Atomic> {
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        description: impl Into<Cow<'static, str>>,
-    ) -> Result<Self> {
+    pub fn new(name: impl Into<Cow<'static, str>>, help: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            value: Labeled::new(Atomic::new(), name, description)?,
+            value: Atomic::new(),
+            descriptor: Descriptor::new(name, help, Vec::new())?,
         })
     }
 
@@ -134,26 +133,46 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
     /// assert_eq!(counter.name(), "count_dracula");
     /// ```
     pub fn name(&self) -> &str {
-        &self.value.name()
+        &self.descriptor.name()
     }
 
-    /// Get the current counter's description
+    /// Get the current counter's help
     ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
     ///
     /// let counter: Counter<AtomicU64> = Counter::new("count_dracula", "I am Count von Count!").unwrap();
-    /// assert_eq!(counter.description(), "I am Count von Count!");
+    /// assert_eq!(counter.help(), "I am Count von Count!");
     /// ```
-    pub fn description(&self) -> &str {
-        &self.value.description()
+    pub fn help(&self) -> &str {
+        &self.descriptor.help()
     }
 
     /// Set the labels of the current counter
     pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
-        self.value.labels = labels.into();
+        self.descriptor.labels = labels.into();
         self
+    }
+}
+
+impl<Atomic: AtomicNum> Collectable for Counter<Atomic> {
+    fn collect(&self) -> MetricValue {
+        MetricValue::Counter(format!("{:?}", self.get()))
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+}
+
+impl<Atomic: AtomicNum> Collectable for &'static Counter<Atomic> {
+    fn collect(&self) -> MetricValue {
+        MetricValue::Counter(format!("{:?}", self.get()))
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 

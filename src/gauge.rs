@@ -1,7 +1,8 @@
 use crate::{
     atomics::{AtomicF64, AtomicNum, Num},
     error::Result,
-    label::Labeled,
+    label::Label,
+    registry::{Collectable, Descriptor, MetricValue},
     timer::Timer,
 };
 use std::{
@@ -16,18 +17,16 @@ pub type IntGauge = Gauge<AtomicI64>;
 
 /// [Definition](https://prometheus.io/docs/instrumenting/writing_clientlibs/#gauge)
 #[derive(Debug)]
-#[repr(transparent)]
 pub struct Gauge<Atomic: AtomicNum = AtomicU64> {
-    value: Labeled<Atomic>,
+    value: Atomic,
+    descriptor: Descriptor,
 }
 
 impl<Atomic: AtomicNum> Gauge<Atomic> {
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        description: impl Into<Cow<'static, str>>,
-    ) -> Result<Self> {
+    pub fn new(name: impl Into<Cow<'static, str>>, help: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            value: Labeled::new(Atomic::new(), name, description)?,
+            value: Atomic::new(),
+            descriptor: Descriptor::new(name, help, Vec::new())?,
         })
     }
 
@@ -81,11 +80,36 @@ impl<Atomic: AtomicNum> Gauge<Atomic> {
     }
 
     pub fn name(&self) -> &str {
-        &self.value.name()
+        &self.descriptor.name()
     }
 
-    pub fn description(&self) -> &str {
-        &self.value.description()
+    pub fn help(&self) -> &str {
+        &self.descriptor.help()
+    }
+
+    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
+        self.descriptor.labels = labels.into();
+        self
+    }
+}
+
+impl<Atomic: AtomicNum> Collectable for Gauge<Atomic> {
+    fn collect(&self) -> MetricValue {
+        MetricValue::Gauge(format!("{:?}", self.get()))
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+}
+
+impl<Atomic: AtomicNum> Collectable for &'static Gauge<Atomic> {
+    fn collect(&self) -> MetricValue {
+        MetricValue::Gauge(format!("{:?}", self.get()))
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 

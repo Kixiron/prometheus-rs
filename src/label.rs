@@ -1,5 +1,5 @@
 use crate::error::{PromError, PromErrorKind, Result};
-use std::{borrow::Cow, convert::TryFrom, ops};
+use std::{borrow::Cow, convert::TryFrom};
 
 /// Label names follow the regex `[a-zA-Z_][a-zA-Z0-9_]*` with the exception that labels starting with `__` are reserved,
 /// as well as the label name `le`
@@ -20,7 +20,7 @@ fn valid_label_name(label: &str) -> bool {
 
 /// Metric names follow the regex `[a-zA-Z_:][a-zA-Z0-9_:]*`
 // TODO: Make this const when rust/#68983 and rust/#49146 land
-fn valid_metric_name(metric: &str) -> bool {
+pub(crate) fn valid_metric_name(metric: &str) -> bool {
     let mut chars = metric.chars();
 
     !metric.is_empty()
@@ -30,7 +30,7 @@ fn valid_metric_name(metric: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
-    pub(crate) label: Cow<'static, str>,
+    pub(crate) name: Cow<'static, str>,
     pub(crate) value: Cow<'static, str>,
 }
 
@@ -39,14 +39,14 @@ impl Label {
     ///
     /// Returns `Err` if `label` doesn't follow the regex `[a-zA-Z_][a-zA-Z0-9_]*`
     pub fn new(
-        label: impl Into<Cow<'static, str>>,
+        name: impl Into<Cow<'static, str>>,
         value: impl Into<Cow<'static, str>>,
     ) -> Result<Self> {
-        let label = label.into();
+        let name = name.into();
 
-        if valid_label_name(&label) {
+        if valid_label_name(&name) {
             Ok(Self {
-                label,
+                name,
                 value: value.into(),
             })
         } else {
@@ -55,6 +55,14 @@ impl Label {
                 PromErrorKind::InvalidLabelName,
             ))
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
     }
 }
 
@@ -67,67 +75,5 @@ where
 
     fn try_from((label, value): (L, V)) -> Result<Self> {
         Self::new(label, value)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Labeled<T> {
-    data: T,
-    name: Cow<'static, str>,
-    description: Cow<'static, str>,
-    pub(crate) labels: Vec<Label>,
-}
-
-impl<T> Labeled<T> {
-    pub fn new(
-        data: T,
-        name: impl Into<Cow<'static, str>>,
-        description: impl Into<Cow<'static, str>>,
-    ) -> Result<Self> {
-        let (name, description) = (name.into(), description.into());
-
-        if valid_metric_name(&name) {
-            Ok(Self {
-                data,
-                name,
-                description,
-                labels: Vec::new(),
-            })
-        } else {
-            Err(PromError::new(
-                "Metric name contains invalid characters",
-                PromErrorKind::InvalidMetricName,
-            ))
-        }
-    }
-
-    pub fn data(&self) -> &T {
-        &self.data
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
-    pub fn labels(&self) -> &[Label] {
-        &self.labels
-    }
-}
-
-impl<T> ops::Deref for Labeled<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-impl<T> ops::DerefMut for Labeled<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.data
     }
 }

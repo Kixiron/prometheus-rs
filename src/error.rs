@@ -40,4 +40,5 @@ pub enum PromErrorKind {
     InvalidMetricName,
     MissingComponent,
     BucketNotFound,
+    DuplicatedCollector,
 }

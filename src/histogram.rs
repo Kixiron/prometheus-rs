@@ -4,7 +4,7 @@ use crate::{
     label::Label,
     timer::Timer,
 };
-use std::{borrow::Cow, cell::RefCell, convert::TryInto, iter, sync::atomic::AtomicU64};
+use std::{borrow::Cow, cell::RefCell, iter, sync::atomic::AtomicU64};
 
 /// The default [`Histogram`] buckets. Meant to measure the response time in seconds of network operations
 pub const DEFAULT_BUCKETS: &[f64; 11] = &[
@@ -44,14 +44,14 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
         self
     }
 
-    pub fn label(mut self, label: impl TryInto<Label, Error = PromError>) -> Result<Self> {
+    pub fn label(mut self, label: Label) -> Self {
         if let Some(ref mut labels) = self.labels {
-            labels.push(label.try_into()?);
+            labels.push(label);
         } else {
-            self.labels = Some(vec![label.try_into()?]);
+            self.labels = Some(vec![label]);
         }
 
-        Ok(self)
+        self
     }
 
     pub fn with_buckets(mut self, buckets: impl Into<Vec<Atomic::Type>>) -> Self {
@@ -263,8 +263,7 @@ mod tests {
             .description("It hist's grams")
             .with_buckets(vec![-1.0, -0.0, 0.0, 1.0])
             .with_labels(vec![Label::new("label", "value").unwrap()])
-            .label(("name", "value"))
-            .unwrap()
+            .label(Label::new("name", "value").unwrap())
             .build()
             .unwrap();
 
