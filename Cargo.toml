@@ -1,0 +1,8 @@
+[package]
+name = "prometheus-rs"
+version = "0.1.0"
+authors = ["Chase Wilson <me@chasewilson.dev>"]
+edition = "2018"
+
+[dev-dependencies.once_cell]
+version = "1.4.0"
