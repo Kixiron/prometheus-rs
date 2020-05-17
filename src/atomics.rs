@@ -1,5 +1,5 @@
 use std::{
-    ops,
+    fmt, ops,
     sync::atomic::{AtomicI64, AtomicU64, Ordering},
 };
 
@@ -59,13 +59,16 @@ impl AtomicF64 {
     }
 }
 
-pub trait Num: ops::Add + ops::Sub + Default {
+pub trait Num:
+    Copy + ops::Add + ops::AddAssign + ops::Sub + Default + PartialEq + PartialOrd + fmt::Debug
+{
     fn from_u64(int: u64) -> Self;
 }
 
 pub trait AtomicNum {
     type Type: Num;
 
+    fn new() -> Self;
     fn inc(&self);
     fn inc_by(&self, inc: Self::Type);
     fn dec(&self);
@@ -76,7 +79,7 @@ pub trait AtomicNum {
 }
 
 macro_rules! impl_atomic {
-    ($($atomic:ty => $ty:ty,)*) => {
+    ($($atomic:ty := $new:expr => $ty:ty,)*) => {
         $(
             impl Num for $ty {
                 #[inline(always)]
@@ -87,6 +90,11 @@ macro_rules! impl_atomic {
 
             impl AtomicNum for $atomic {
                 type Type = $ty;
+
+                /// Create a new `AtomicNum`
+                fn new() -> Self {
+                    $new
+                }
 
                 /// Increment the value by 1
                 fn inc(&self) {
@@ -129,9 +137,9 @@ macro_rules! impl_atomic {
 
 // Implement `AtomicNum` and `Num` for all data types
 impl_atomic! {
-    AtomicU64 => u64,
-    AtomicI64 => i64,
-    AtomicF64 => f64,
+    AtomicU64 := AtomicU64::new(0) => u64,
+    AtomicI64 := AtomicI64::new(0) => i64,
+    AtomicF64 := AtomicF64::zeroed() => f64,
 }
 
 #[cfg(test)]

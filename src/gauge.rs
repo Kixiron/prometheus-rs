@@ -1,45 +1,36 @@
 use crate::{
     atomics::{AtomicF64, AtomicNum, Num},
-    error::PromError,
-    label::{Label, Labeled, Metric},
+    error::Result,
+    label::Labeled,
     timer::Timer,
 };
 use std::{
+    borrow::Cow,
     sync::atomic::{AtomicI64, AtomicU64},
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
+
+pub type UintGauge = Gauge<AtomicU64>;
+pub type FloatGauge = Gauge<AtomicF64>;
+pub type IntGauge = Gauge<AtomicI64>;
 
 /// [Definition](https://prometheus.io/docs/instrumenting/writing_clientlibs/#gauge)
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct Gauge<Atomic: AtomicNum = AtomicU64> {
-    value: Atomic,
-}
-
-impl Gauge<AtomicU64> {
-    pub const fn new() -> Self {
-        Self {
-            value: AtomicU64::new(0),
-        }
-    }
-}
-
-impl Gauge<AtomicF64> {
-    pub const fn new() -> Self {
-        Self {
-            value: AtomicF64::zeroed(),
-        }
-    }
-}
-
-impl Gauge<AtomicI64> {
-    pub const fn new() -> Self {
-        Self {
-            value: AtomicI64::new(0),
-        }
-    }
+    value: Labeled<Atomic>,
 }
 
 impl<Atomic: AtomicNum> Gauge<Atomic> {
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        description: impl Into<Cow<'static, str>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            value: Labeled::new(Atomic::new(), name, description)?,
+        })
+    }
+
     pub fn inc(&self) {
         self.value.inc();
     }
@@ -77,203 +68,24 @@ impl<Atomic: AtomicNum> Gauge<Atomic> {
         self.value.set(Atomic::Type::from_u64(current_time));
     }
 
-    pub fn start_timer<'a>(&'a self) -> Timer<'a, Gauge<Atomic>> {
+    pub fn start_timer<'a>(&'a self) -> Timer<'a, Self> {
         Timer::new(self)
     }
-}
 
-impl<Atomic: AtomicNum> Metric for Gauge<Atomic> {
-    fn metric_kind(&self) -> &'static str {
-        "gauge"
-    }
-}
+    pub fn time_closure(&self, closure: impl Fn()) {
+        let start = Instant::now();
+        closure();
+        let elapsed = start.elapsed().as_secs();
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct UintGauge(Labeled<Gauge<AtomicU64>>);
-
-impl UintGauge {
-    pub fn new(name: &'static str, description: &'static str) -> Result<Self, PromError> {
-        Ok(Self(Labeled::new(
-            <Gauge<AtomicU64>>::new(),
-            name,
-            description,
-        )?))
-    }
-
-    pub fn inc(&self) {
-        self.0.inc();
-    }
-
-    pub fn inc_by(&self, inc: u64) {
-        self.0.inc_by(inc);
-    }
-
-    pub fn dec(&self) {
-        self.0.dec();
-    }
-
-    pub fn dec_by(&self, dec: u64) {
-        self.0.dec_by(dec);
-    }
-
-    pub fn set(&self, val: u64) {
-        self.0.set(val);
-    }
-
-    pub fn get(&self) -> u64 {
-        self.0.get()
-    }
-
-    pub fn clear(&self) {
-        self.0.clear()
-    }
-
-    pub fn set_to_current_time(&self) {
-        self.0.set_to_current_time();
-    }
-
-    pub fn start_timer<'a>(&'a self) -> Timer<'a, Gauge<AtomicU64>> {
-        self.0.start_timer()
+        self.set(Atomic::Type::from_u64(elapsed))
     }
 
     pub fn name(&self) -> &str {
-        &self.0.name()
+        &self.value.name()
     }
 
     pub fn description(&self) -> &str {
-        &self.0.description()
-    }
-
-    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
-        self.0.labels = labels.into();
-        self
-    }
-}
-
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct IntGauge(Labeled<Gauge<AtomicI64>>);
-
-impl IntGauge {
-    pub fn new(name: &'static str, description: &'static str) -> Result<Self, PromError> {
-        Ok(Self(Labeled::new(
-            <Gauge<AtomicI64>>::new(),
-            name,
-            description,
-        )?))
-    }
-
-    pub fn inc(&self) {
-        self.0.inc();
-    }
-
-    pub fn inc_by(&self, inc: i64) {
-        self.0.inc_by(inc);
-    }
-
-    pub fn dec(&self) {
-        self.0.dec();
-    }
-
-    pub fn dec_by(&self, dec: i64) {
-        self.0.dec_by(dec);
-    }
-
-    pub fn set(&self, val: i64) {
-        self.0.set(val);
-    }
-
-    pub fn get(&self) -> i64 {
-        self.0.get()
-    }
-
-    pub fn clear(&self) {
-        self.0.clear()
-    }
-
-    pub fn set_to_current_time(&self) {
-        self.0.set_to_current_time();
-    }
-
-    pub fn start_timer<'a>(&'a self) -> Timer<'a, Gauge<AtomicI64>> {
-        self.0.start_timer()
-    }
-
-    pub fn name(&self) -> &str {
-        &self.0.name()
-    }
-
-    pub fn description(&self) -> &str {
-        &self.0.description()
-    }
-
-    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
-        self.0.labels = labels.into();
-        self
-    }
-}
-
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct FloatGauge(Labeled<Gauge<AtomicF64>>);
-
-impl FloatGauge {
-    pub fn new(name: &'static str, description: &'static str) -> Result<Self, PromError> {
-        Ok(Self(Labeled::new(
-            <Gauge<AtomicF64>>::new(),
-            name,
-            description,
-        )?))
-    }
-
-    pub fn inc(&self) {
-        self.0.inc();
-    }
-
-    pub fn inc_by(&self, inc: f64) {
-        self.0.inc_by(inc);
-    }
-
-    pub fn dec(&self) {
-        self.0.dec();
-    }
-
-    pub fn dec_by(&self, dec: f64) {
-        self.0.dec_by(dec);
-    }
-
-    pub fn set(&self, val: f64) {
-        self.0.set(val);
-    }
-
-    pub fn get(&self) -> f64 {
-        self.0.get()
-    }
-
-    pub fn clear(&self) {
-        self.0.clear()
-    }
-
-    pub fn set_to_current_time(&self) {
-        self.0.set_to_current_time();
-    }
-
-    pub fn start_timer<'a>(&'a self) -> Timer<'a, Gauge<AtomicF64>> {
-        self.0.start_timer()
-    }
-
-    pub fn name(&self) -> &str {
-        &self.0.name()
-    }
-
-    pub fn description(&self) -> &str {
-        &self.0.description()
-    }
-
-    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
-        self.0.labels = labels.into();
-        self
+        &self.value.description()
     }
 }
 
@@ -285,9 +97,7 @@ mod tests {
 
     #[test]
     fn uint_gauge() {
-        let uint = UintGauge::new("some_uint", "Counts things").unwrap();
-
-        assert_eq!(uint.name(), "some_uint");
+        let uint: Gauge<AtomicU64> = Gauge::new("some_uint", "Counts things").unwrap();
 
         uint.inc();
         assert_eq!(uint.get(), 1);
@@ -310,7 +120,7 @@ mod tests {
 
     #[test]
     fn uint_gauge_timer() {
-        let uint = UintGauge::new("some_uint", "Counts things").unwrap();
+        let uint: Gauge<AtomicU64> = Gauge::new("some_uint", "Counts things").unwrap();
 
         {
             let _timer = uint.start_timer();
@@ -329,8 +139,8 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn uint_threaded() {
-        static UINT: Lazy<UintGauge> =
-            Lazy::new(|| UintGauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
+        static UINT: Lazy<Gauge<AtomicU64>> =
+            Lazy::new(|| Gauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
 
         let mut threads = Vec::with_capacity(5);
         for _ in 0..5 {
@@ -348,9 +158,7 @@ mod tests {
 
     #[test]
     fn float_gauge() {
-        let float = FloatGauge::new("some_float", "Counts things").unwrap();
-
-        assert_eq!(float.name(), "some_float");
+        let float: Gauge<AtomicF64> = Gauge::new("some_float", "Counts things").unwrap();
 
         float.inc();
         assert_eq!(float.get(), 1.0);
@@ -373,7 +181,7 @@ mod tests {
 
     #[test]
     fn float_gauge_timer() {
-        let float = FloatGauge::new("some_float", "Counts things").unwrap();
+        let float: Gauge<AtomicF64> = Gauge::new("some_float", "Counts things").unwrap();
 
         {
             let _timer = float.start_timer();
@@ -392,8 +200,8 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn float_threaded() {
-        static FLOAT: Lazy<FloatGauge> =
-            Lazy::new(|| FloatGauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
+        static FLOAT: Lazy<Gauge<AtomicF64>> =
+            Lazy::new(|| Gauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
 
         let mut threads = Vec::with_capacity(5);
         for _ in 0..5 {
@@ -411,9 +219,7 @@ mod tests {
 
     #[test]
     fn int_gauge() {
-        let int = IntGauge::new("some_int", "Counts things").unwrap();
-
-        assert_eq!(int.name(), "some_int");
+        let int: Gauge<AtomicI64> = Gauge::new("some_int", "Counts things").unwrap();
 
         int.inc();
         assert_eq!(int.get(), 1);
@@ -436,7 +242,7 @@ mod tests {
 
     #[test]
     fn int_gauge_timer() {
-        let int = IntGauge::new("some_int", "Counts things").unwrap();
+        let int: Gauge<AtomicI64> = Gauge::new("some_int", "Counts things").unwrap();
 
         {
             let _timer = int.start_timer();
@@ -455,8 +261,8 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn int_threaded() {
-        static INT: Lazy<IntGauge> =
-            Lazy::new(|| IntGauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
+        static INT: Lazy<Gauge<AtomicI64>> =
+            Lazy::new(|| Gauge::new("surfin_the_world_wide_thread", "Counts things").unwrap());
 
         let mut threads = Vec::with_capacity(5);
         for _ in 0..5 {

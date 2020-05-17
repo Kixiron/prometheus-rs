@@ -1,7 +1,7 @@
 use crate::{
     atomics::{AtomicNum, Num},
     gauge::Gauge,
-    histogram::Histogram,
+    histogram::{Histogram, LocalHistogram},
 };
 use std::time::Instant;
 
@@ -34,14 +34,21 @@ pub trait Observable {
     fn observe(&self, val: u64);
 }
 
-impl<Atomic: AtomicNum> Observable for Histogram<Atomic> {
+impl<'a, Atomic: AtomicNum> Observable for Histogram<Atomic> {
     #[inline(always)]
     fn observe(&self, val: u64) {
         self.observe(Num::from_u64(val));
     }
 }
 
-impl<Atomic: AtomicNum> Observable for Gauge<Atomic> {
+impl<'a, Atomic: AtomicNum> Observable for LocalHistogram<'_, Atomic> {
+    #[inline(always)]
+    fn observe(&self, val: u64) {
+        self.inner.borrow_mut().observe(Num::from_u64(val));
+    }
+}
+
+impl<'a, Atomic: AtomicNum> Observable for Gauge<Atomic> {
     #[inline(always)]
     fn observe(&self, val: u64) {
         self.set(Num::from_u64(val));
