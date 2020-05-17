@@ -2,10 +2,11 @@ use crate::{
     atomics::{AtomicF64, AtomicNum},
     error::Result,
     label::Label,
-    registry::{Collectable, Descriptor, MetricValue},
+    registry::{Collectable, Descriptor},
 };
 use std::{
     borrow::Cow,
+    fmt::{self, Write},
     sync::atomic::{AtomicI64, AtomicU64},
 };
 
@@ -149,6 +150,10 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
         &self.descriptor.help()
     }
 
+    pub fn labels(&self) -> &[Label] {
+        &self.descriptor.labels()
+    }
+
     /// Set the labels of the current counter
     pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
         self.descriptor.labels = labels.into();
@@ -156,19 +161,33 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
     }
 }
 
-impl<Atomic: AtomicNum> Collectable for Counter<Atomic> {
-    fn collect(&self) -> MetricValue {
-        MetricValue::Counter(format!("{:?}", self.get()))
-    }
-
-    fn descriptor(&self) -> &Descriptor {
-        &self.descriptor
-    }
-}
-
 impl<Atomic: AtomicNum> Collectable for &'static Counter<Atomic> {
-    fn collect(&self) -> MetricValue {
-        MetricValue::Counter(format!("{:?}", self.get()))
+    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+        writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
+        writeln!(buf, "# TYPE {} counter", self.name())?;
+
+        write!(buf, "{}", self.name())?;
+        if !self.labels().is_empty() {
+            write!(buf, "{{")?;
+
+            let (last, labels) = self
+                .labels()
+                .split_last()
+                .expect("There is at least 1 label");
+            for label in labels {
+                write!(buf, "{}={:?},", label.name(), label.value())?;
+            }
+            write!(buf, "{}={:?}", last.name(), last.value())?;
+
+            write!(buf, "}} ")?;
+        } else {
+            write!(buf, " ")?;
+        }
+
+        Atomic::format(self.get(), buf, false)?;
+        writeln!(buf)?;
+
+        Ok(())
     }
 
     fn descriptor(&self) -> &Descriptor {

@@ -2,11 +2,12 @@ use crate::{
     atomics::{AtomicF64, AtomicNum, Num},
     error::Result,
     label::Label,
-    registry::{Collectable, Descriptor, MetricValue},
+    registry::{Collectable, Descriptor},
     timer::Timer,
 };
 use std::{
     borrow::Cow,
+    fmt::{self, Write},
     sync::atomic::{AtomicI64, AtomicU64},
     time::{Instant, SystemTime},
 };
@@ -87,25 +88,43 @@ impl<Atomic: AtomicNum> Gauge<Atomic> {
         &self.descriptor.help()
     }
 
+    pub fn labels(&self) -> &[Label] {
+        &self.descriptor.labels
+    }
+
     pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
         self.descriptor.labels = labels.into();
         self
     }
 }
 
-impl<Atomic: AtomicNum> Collectable for Gauge<Atomic> {
-    fn collect(&self) -> MetricValue {
-        MetricValue::Gauge(format!("{:?}", self.get()))
-    }
+impl<Atomic: AtomicNum> Collectable for &Gauge<Atomic> {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+        writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
+        writeln!(buf, "# TYPE {} gauge", self.name())?;
 
-    fn descriptor(&self) -> &Descriptor {
-        &self.descriptor
-    }
-}
+        write!(buf, "{}", self.name())?;
+        if !self.labels().is_empty() {
+            write!(buf, "{{")?;
 
-impl<Atomic: AtomicNum> Collectable for &'static Gauge<Atomic> {
-    fn collect(&self) -> MetricValue {
-        MetricValue::Gauge(format!("{:?}", self.get()))
+            let (last, labels) = self
+                .labels()
+                .split_last()
+                .expect("There is at least 1 label");
+            for label in labels {
+                write!(buf, "{}={:?},", label.name(), label.value())?;
+            }
+            write!(buf, "{}={:?}", last.name(), last.value())?;
+
+            write!(buf, "}} ")?;
+        } else {
+            write!(buf, " ")?;
+        }
+
+        Atomic::format(self.get(), buf, false)?;
+        writeln!(buf)?;
+
+        Ok(())
     }
 
     fn descriptor(&self) -> &Descriptor {

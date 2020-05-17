@@ -93,10 +93,24 @@ impl Registry {
     pub fn collect<'a>(&'a self) -> Vec<Metric<'a>> {
         let mut metrics = Vec::with_capacity(self.inputs.len());
         for input in self.inputs.iter() {
-            metrics.push(Metric::new(input.collect(), input.descriptor()));
+            metrics.push(Metric::new(&**input, input.descriptor()));
         }
 
         metrics
+    }
+
+    pub fn collect_to_string(&self) -> std::result::Result<String, fmt::Error> {
+        let mut buf = String::new();
+        for input in self.inputs.iter() {
+            input.encode_text(&mut buf)?;
+        }
+
+        Ok(buf)
+    }
+
+    /// Initializes all registered collectors, useful for when the `Registry` is stored in a `once_cell::Lazy` or `lazy_static`
+    pub fn init_registered(&self) {
+        self.collect();
     }
 }
 
@@ -115,16 +129,16 @@ impl fmt::Debug for Registry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Metric<'a> {
     name: &'a str,
     help: &'a str,
     labels: &'a [Label],
-    value: MetricValue,
+    value: &'a dyn Collectable,
 }
 
 impl<'a> Metric<'a> {
-    fn new(value: MetricValue, descriptor: &'a Descriptor) -> Self {
+    fn new(value: &'a dyn Collectable, descriptor: &'a Descriptor) -> Self {
         Self {
             name: descriptor.name(),
             help: descriptor.help(),
@@ -133,44 +147,23 @@ impl<'a> Metric<'a> {
         }
     }
 
-    pub fn text_format(&self, buf: &mut impl fmt::Write) -> fmt::Result {
-        match &self.value {
-            MetricValue::Counter(val) | MetricValue::Gauge(val) => {
-                writeln!(buf, "# HELP {} {}", self.name, self.help)?;
-                writeln!(
-                    buf,
-                    "# TYPE {} {}",
-                    self.name,
-                    if self.value.is_counter() {
-                        "counter"
-                    } else {
-                        "gauge"
-                    }
-                )?;
+    pub fn encode_text(&self, buf: &mut String) -> fmt::Result {
+        self.value.encode_text(buf)
+    }
+}
 
-                write!(buf, "{}", self.name)?;
-                if !self.labels.is_empty() {
-                    write!(buf, "{{")?;
-
-                    let (last, labels) =
-                        self.labels.split_last().expect("There is at least 1 label");
-                    for label in labels {
-                        write!(buf, "{}={:?},", label.name(), label.value())?;
-                    }
-                    write!(buf, "{}={:?}", last.name(), last.value())?;
-
-                    write!(buf, "}}")?;
-                }
-                writeln!(buf, " {}", val)?;
-            }
-        }
-
-        Ok(())
+impl fmt::Debug for Metric<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Metric")
+            .field("name", &self.name)
+            .field("help", &self.help)
+            .field("labels", &self.labels)
+            .finish()
     }
 }
 
 pub trait Collectable {
-    fn collect(&self) -> MetricValue;
+    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result;
     fn descriptor(&self) -> &Descriptor;
 }
 
@@ -178,8 +171,8 @@ impl<T> Collectable for T
 where
     T: AsRef<dyn Collectable>,
 {
-    fn collect(&self) -> MetricValue {
-        self.as_ref().collect()
+    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+        self.as_ref().encode_text(buf)
     }
 
     fn descriptor(&self) -> &Descriptor {
@@ -233,22 +226,14 @@ impl Descriptor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MetricValue {
-    Counter(String),
-    Gauge(String),
-}
-
-impl MetricValue {
-    pub fn is_counter(&self) -> bool {
-        matches!(self, Self::Counter(..))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Counter, Gauge};
+    use crate::{
+        counter::Counter,
+        gauge::Gauge,
+        histogram::{Histogram, HistogramBuilder, DEFAULT_BUCKETS},
+    };
     use once_cell::sync::Lazy;
 
     #[test]
@@ -256,53 +241,29 @@ mod tests {
         static COUNTER: Lazy<Counter> =
             Lazy::new(|| Counter::new("my_counter", "Counts things because I can't").unwrap());
         static GAUGE: Lazy<Gauge> = Lazy::new(|| Gauge::new("my_gauge", "Gagin' stuff").unwrap());
-        static REGISTRY: Lazy<Registry> = Lazy::new(|| {
-            RegistryBuilder::new()
-                .register(Box::new(&*COUNTER))
-                .register(Box::new(&*GAUGE))
+        static HISTOGRAM: Lazy<Histogram> = Lazy::new(|| {
+            HistogramBuilder::new()
+                .name("some_histogram")
+                .help("It hist's grams")
+                .with_buckets(DEFAULT_BUCKETS.to_vec())
+                .with_labels(vec![Label::new("label", "value").unwrap()])
+                .label(Label::new("name", "value").unwrap())
                 .build()
                 .unwrap()
         });
 
-        COUNTER.inc();
-
-        assert_eq!(
-            REGISTRY.collect(),
-            vec![
-                Metric {
-                    name: "my_counter".into(),
-                    help: "Counts things because I can't".into(),
-                    labels: &[],
-                    value: MetricValue::Counter("1".into()),
-                },
-                Metric {
-                    name: "my_gauge".into(),
-                    help: "Gagin' stuff".into(),
-                    labels: &[],
-                    value: MetricValue::Gauge("0".into()),
-                },
-            ]
-        );
+        static REGISTRY: Lazy<Registry> = Lazy::new(|| {
+            RegistryBuilder::new()
+                .register(Box::new(&*COUNTER))
+                .register(Box::new(&*GAUGE))
+                .register(Box::new(&*HISTOGRAM))
+                .build()
+                .unwrap()
+        });
 
         GAUGE.set(10000);
         COUNTER.set(100);
 
-        assert_eq!(
-            REGISTRY.collect(),
-            vec![
-                Metric {
-                    name: "my_counter".into(),
-                    help: "Counts things because I can't".into(),
-                    labels: &[],
-                    value: MetricValue::Counter("100".into()),
-                },
-                Metric {
-                    name: "my_gauge".into(),
-                    help: "Gagin' stuff".into(),
-                    labels: &[],
-                    value: MetricValue::Gauge("10000".into()),
-                },
-            ]
-        );
+        println!("{}", REGISTRY.collect_to_string().unwrap());
     }
 }

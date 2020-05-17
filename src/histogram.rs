@@ -2,19 +2,37 @@ use crate::{
     atomics::{AtomicF64, AtomicNum},
     error::{PromError, PromErrorKind, Result},
     label::Label,
+    registry::{Collectable, Descriptor},
     timer::Timer,
 };
-use std::{borrow::Cow, cell::RefCell, iter, sync::atomic::AtomicU64};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    fmt::{self, Write},
+    iter,
+    sync::atomic::AtomicU64,
+};
 
 /// The default [`Histogram`] buckets. Meant to measure the response time in seconds of network operations
-pub const DEFAULT_BUCKETS: &[f64; 11] = &[
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+pub const DEFAULT_BUCKETS: &[f64; 12] = &[
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    f64::INFINITY,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistogramBuilder<Atomic: AtomicNum = AtomicF64> {
     name: Option<Cow<'static, str>>,
-    description: Option<Cow<'static, str>>,
+    help: Option<Cow<'static, str>>,
     labels: Option<Vec<Label>>,
     buckets: Option<Vec<Atomic::Type>>,
 }
@@ -23,7 +41,7 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
     pub fn new() -> Self {
         Self {
             name: None,
-            description: None,
+            help: None,
             labels: None,
             buckets: None,
         }
@@ -34,8 +52,8 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
         self
     }
 
-    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
-        self.description = Some(description.into());
+    pub fn help(mut self, help: impl Into<Cow<'static, str>>) -> Self {
+        self.help = Some(help.into());
         self
     }
 
@@ -76,9 +94,9 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
                 PromErrorKind::MissingComponent,
             )
         })?;
-        let description = self.description.ok_or_else(|| {
+        let help = self.help.ok_or_else(|| {
             PromError::new(
-                "Histograms must have a description, but you didn't give one",
+                "Histograms must have a help, but you didn't give one",
                 PromErrorKind::MissingComponent,
             )
         })?;
@@ -97,9 +115,7 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
             ))
         } else {
             Ok(Histogram {
-                name,
-                description,
-                labels,
+                descriptor: Descriptor::new(name, help, labels)?,
                 values: iter::from_fn(|| Some(Atomic::new()))
                     .take(buckets.len())
                     .collect(),
@@ -112,10 +128,8 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
 }
 
 #[derive(Debug)]
-pub struct Histogram<Atomic: AtomicNum> {
-    name: Cow<'static, str>,
-    description: Cow<'static, str>,
-    labels: Vec<Label>,
+pub struct Histogram<Atomic: AtomicNum = AtomicF64> {
+    descriptor: Descriptor,
     buckets: Vec<Atomic::Type>,
     values: Vec<Atomic>,
     count: AtomicU64,
@@ -158,15 +172,15 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        &self.descriptor.name()
     }
 
-    pub fn description(&self) -> &str {
-        &self.description
+    pub fn help(&self) -> &str {
+        &self.descriptor.help()
     }
 
     pub fn labels(&self) -> &[Label] {
-        &self.labels
+        &self.descriptor.labels()
     }
 
     pub fn buckets(&self) -> &[Atomic::Type] {
@@ -186,6 +200,70 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
                 PromErrorKind::BucketNotFound,
             ))
         }
+    }
+}
+
+impl<Atomic: AtomicNum> Collectable for &Histogram<Atomic> {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+        writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
+        writeln!(buf, "# TYPE {} histogram", self.name())?;
+
+        let row = |buf: &mut String, name| {
+            write!(buf, "{}_{}", self.name(), name)?;
+            if !self.labels().is_empty() {
+                write!(buf, "{{")?;
+
+                let (last, labels) = self
+                    .labels()
+                    .split_last()
+                    .expect("There is at least 1 label");
+                for label in labels {
+                    write!(buf, "{}={:?},", label.name(), label.value())?;
+                }
+                write!(buf, "{}={:?}", last.name(), last.value())?;
+
+                write!(buf, "}} ")?;
+            } else {
+                write!(buf, " ")?;
+            }
+
+            Ok(())
+        };
+
+        row(buf, "sum")?;
+        Atomic::format(self.sum.get(), buf, false)?;
+        writeln!(buf)?;
+
+        row(buf, "count")?;
+        <AtomicU64 as AtomicNum>::format(self.count.get(), buf, false)?;
+        writeln!(buf)?;
+
+        for (i, bucket) in self.buckets.iter().enumerate() {
+            write!(buf, "{}_bucket", self.name())?;
+
+            if !self.labels().is_empty() {
+                write!(buf, "{{")?;
+
+                for label in self.labels() {
+                    write!(buf, "{}={:?},", label.name(), label.value())?;
+                }
+                write!(buf, "le=")?;
+                Atomic::format(*bucket, buf, true)?;
+
+                write!(buf, "}} ")?;
+            } else {
+                write!(buf, " ")?;
+            }
+
+            Atomic::format(self.values[i].get(), buf, false)?;
+            writeln!(buf)?;
+        }
+
+        Ok(())
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -211,6 +289,29 @@ impl<'a, Atomic: AtomicNum> InnerLocalHist<'a, Atomic> {
         self.count += 1;
         self.sum += val;
     }
+
+    pub(crate) fn clear(&mut self) {
+        for val in self.values.iter_mut() {
+            *val = Atomic::Type::default();
+        }
+
+        self.count = 0;
+        self.sum = Atomic::Type::default();
+    }
+
+    pub(crate) fn flush(&mut self) {
+        if self.count == 0 {
+            return;
+        }
+
+        for (i, val) in self.values.iter().enumerate() {
+            self.histogram.values[i].inc_by(*val);
+        }
+
+        self.histogram.count.inc_by(self.count);
+        self.histogram.sum.inc_by(self.sum);
+        self.clear();
+    }
 }
 
 impl<'a, Atomic: AtomicNum> LocalHistogram<'a, Atomic> {
@@ -225,18 +326,16 @@ impl<'a, Atomic: AtomicNum> LocalHistogram<'a, Atomic> {
         }
     }
 
+    pub fn flush(&mut self) {
+        self.inner.borrow_mut().flush();
+    }
+
     pub fn observe(&mut self, val: Atomic::Type) {
         self.inner.borrow_mut().observe(val);
     }
 
     pub fn clear(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        for val in inner.values.iter_mut() {
-            *val = Atomic::Type::default();
-        }
-
-        inner.count = 0;
-        inner.sum = Atomic::Type::default();
+        self.inner.borrow_mut().clear();
     }
 
     pub fn get_count(&self) -> u64 {
@@ -260,7 +359,7 @@ mod tests {
     fn build() {
         let built: Histogram<AtomicF64> = HistogramBuilder::new()
             .name("some_histogram")
-            .description("It hist's grams")
+            .help("It hist's grams")
             .with_buckets(vec![-1.0, -0.0, 0.0, 1.0])
             .with_labels(vec![Label::new("label", "value").unwrap()])
             .label(Label::new("name", "value").unwrap())
@@ -268,7 +367,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(built.name(), "some_histogram");
-        assert_eq!(built.description(), "It hist's grams");
+        assert_eq!(built.help(), "It hist's grams");
         assert_eq!(built.buckets(), &[-1.0, -0.0, 0.0, 1.0]);
         assert_eq!(
             built.labels(),

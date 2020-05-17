@@ -1,5 +1,6 @@
 use std::{
-    fmt, ops,
+    fmt::{self, Write},
+    ops,
     sync::atomic::{AtomicI64, AtomicU64, Ordering},
 };
 
@@ -76,10 +77,11 @@ pub trait AtomicNum {
     fn set(&self, val: Self::Type);
     fn get(&self) -> Self::Type;
     fn clear(&self);
+    fn format(int: Self::Type, f: &mut String, quotes: bool) -> fmt::Result;
 }
 
 macro_rules! impl_atomic {
-    ($($atomic:ty := $new:expr => $ty:ty,)*) => {
+    ($($atomic:ty := $new:expr => $ty:ty = $fmt:expr,)*) => {
         $(
             impl Num for $ty {
                 #[inline(always)]
@@ -130,6 +132,11 @@ macro_rules! impl_atomic {
                 fn clear(&self) {
                     self.store(0 as _, Ordering::SeqCst);
                 }
+
+                fn format(int: Self::Type, f: &mut String, quotes: bool) -> fmt::Result {
+                    let fmt: fn(&mut String, Self::Type, bool) -> fmt::Result = $fmt;
+                    fmt(f, int, quotes)
+                }
             }
         )*
     };
@@ -137,9 +144,37 @@ macro_rules! impl_atomic {
 
 // Implement `AtomicNum` and `Num` for all data types
 impl_atomic! {
-    AtomicU64 := AtomicU64::new(0) => u64,
-    AtomicI64 := AtomicI64::new(0) => i64,
-    AtomicF64 := AtomicF64::zeroed() => f64,
+    AtomicU64 := AtomicU64::new(0) => u64 = |f, int, quotes| {
+        if quotes {
+            write!(f, "\"{:?}\"", int)
+        } else {
+            write!(f, "{:?}", int)
+        }
+    },
+    AtomicI64 := AtomicI64::new(0) => i64 = |f, int, quotes| {
+        if quotes {
+            write!(f, "\"{:?}\"", int)
+        } else {
+            write!(f, "{:?}", int)
+        }
+    },
+    AtomicF64 := AtomicF64::zeroed() => f64 = |f, int, quotes| {
+        if quotes {
+            match int {
+                int if int.is_infinite() && int.is_sign_positive() => write!(f, "\"+Inf\""),
+                int if int.is_infinite() && int.is_sign_negative() => write!(f, "\"-Inf\""),
+                int if int.is_nan()  => write!(f, "\"Nan\""),
+                int => write!(f, "\"{:?}\"", int),
+            }
+        } else {
+            match int {
+                int if int.is_infinite() && int.is_sign_positive() => write!(f, "+Inf"),
+                int if int.is_infinite() && int.is_sign_negative() => write!(f, "-Inf"),
+                int if int.is_nan()  => write!(f, "Nan"),
+                int => write!(f, "{:?}", int),
+            }
+        }
+    },
 }
 
 #[cfg(test)]
