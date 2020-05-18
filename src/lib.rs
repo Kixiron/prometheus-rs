@@ -8,7 +8,6 @@
 )]
 
 mod atomics;
-/// A monotonically increasing counter. When in doubt of what type to choose, default to [`AtomicU64`]
 pub mod counter;
 mod error;
 pub mod gauge;
@@ -23,5 +22,6 @@ pub use counter::Counter;
 pub use error::{PromError, PromErrorKind};
 pub use gauge::Gauge;
 pub use group::{CounterGroup, Group, Key};
+pub use label::Label;
 pub use registry::{Registry, RegistryBuilder};
 pub use timer::Timer;

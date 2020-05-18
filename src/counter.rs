@@ -1,3 +1,34 @@
+//! A monotonically increasing counter, or a counter that may only increase
+//!
+//! Multiple continence types are provided for common integer sizes, [`UintCounter`], [`FloatCounter`] and [`IntCounter`]
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use prometheus_rs::counter::UintCounter;
+//! use once_cell::sync::Lazy;
+//! use std::{net::TcpListener, io};
+//!
+//! static REQUEST_COUNTER: Lazy<UintCounter> =
+//!     Lazy::new(|| UintCounter::new("request_counter", "Counts the number of requests").unwrap());
+//!
+//! fn main() -> io::Result<()> {
+//!     let listener = TcpListener::bind("127.0.0.1:80")?;
+//!
+//!    for stream in listener.incoming() {
+//!        REQUEST_COUNTER.inc();
+//!
+//!        println!("{:?}", stream?);
+//!    }
+//!
+//!    Ok(())
+//! }
+//! ```
+//!
+//! [`UintCounter`]: crate::counter::UintCounter
+//! [`FloatCounter`]: crate::counter::FloatCounter
+//! [`IntCounter`]: crate::counter::IntCounter
+
 use crate::{
     atomics::{AtomicF64, AtomicNum},
     error::Result,
@@ -12,20 +43,58 @@ use std::{
 
 /// A [`Counter`] that stores a `u64`, see [`Counter`] for more information
 ///
+/// # Examples
+///
+/// ```rust
+/// use prometheus_rs::counter::UintCounter;
+///
+/// let counter = UintCounter::new("integers", "Counts integers").unwrap();
+/// counter.inc_by(10);
+///
+/// assert_eq!(counter.get(), 10u64);
+/// ```
+///
 /// [`Counter`]: crate::Counter
 pub type UintCounter = Counter<AtomicU64>;
 
 /// A [`Counter`] that stores an `i64`, see [`Counter`] for more information
 ///
+/// Using this counter is discouraged, for an integer counter [`UintCounter`] should be used
+///
+/// # Examples
+///
+/// ```rust
+/// use prometheus_rs::counter::IntCounter;
+///
+/// let counter = IntCounter::new("integers", "Counts integers").unwrap();
+/// counter.inc_by(10);
+///
+/// assert_eq!(counter.get(), 10i64);
+/// ```
+///
 /// [`Counter`]: crate::Counter
+/// [`UintCounter`]: crate::UintCounter
 pub type IntCounter = Counter<AtomicI64>;
 
 /// A [`Counter`] that stores a `f64`, see [`Counter`] for more information
 ///
+/// # Examples
+///
+/// ```rust
+/// use prometheus_rs::counter::FloatCounter;
+///
+/// let counter = FloatCounter::new("integers", "Counts integers").unwrap();
+/// counter.inc_by(10.0);
+///
+/// assert_eq!(counter.get(), 10.0f64);
+/// ```
+///
 /// [`Counter`]: crate::Counter
 pub type FloatCounter = Counter<AtomicF64>;
 
-/// A monotonically increasing counter. When in doubt of what type to choose, default to [`AtomicU64`]
+/// A monotonically increasing counter. When in doubt of what type to choose, default to [`std::sync::atomic::AtomicU64`].
+///
+/// Multiple continence types are provided, [`UintCounter`], [`FloatCounter`] and [`IntCounter`]
 ///
 /// To quote the [docs]:
 ///
@@ -34,17 +103,72 @@ pub type FloatCounter = Counter<AtomicF64>;
 /// >
 /// > Do not use a counter to expose a value that can decrease. For example, do not use a counter for the number of currently running processes; instead use a [gauge].
 ///
-/// [`AtomicU64`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU64.html
+/// # Examples
+///
+/// ```rust,no_run
+/// use prometheus_rs::counter::UintCounter;
+/// use once_cell::sync::Lazy;
+/// use std::{net::TcpListener, io};
+///
+/// static REQUEST_COUNTER: Lazy<UintCounter> =
+///     Lazy::new(|| UintCounter::new("request_counter", "Counts the number of requests").unwrap());
+///
+/// fn main() -> io::Result<()> {
+///     let listener = TcpListener::bind("127.0.0.1:80")?;
+///
+///    for stream in listener.incoming() {
+///        REQUEST_COUNTER.inc();
+///
+///        println!("{:?}", stream?);
+///    }
+///
+///    Ok(())
+/// }
+/// ```
+///
+/// [`std::sync::atomic::AtomicU64`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU64.html
+/// [`UintCounter`]: crate::counter::UintCounter
+/// [`FloatCounter`]: crate::counter::FloatCounter
+/// [`IntCounter`]: crate::counter::IntCounter
 /// [docs]: https://prometheus.io/docs/concepts/metric_types/#counter
 /// [gauge]: crate::Gauge
 #[derive(Debug)]
 pub struct Counter<Atomic: AtomicNum = AtomicU64> {
     /// The inner atomically manipulated value
     value: Atomic,
+    /// The prometheus description data, like the counter name, help and labels
     descriptor: Descriptor,
 }
 
 impl<Atomic: AtomicNum> Counter<Atomic> {
+    /// Create a new `Counter` with the provided name and help. To add labels to the counter, see [`Counter::with_labels`]
+    ///
+    /// When exported into the Prometheus [text-based format], `name` and `help` will be formatted as follows
+    ///
+    /// ```text
+    /// # HELP {{ name }} {{ help }}
+    /// # TYPE {{ name }} counter
+    /// {{ name }} 0
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use prometheus_rs::Counter;
+    /// use std::sync::atomic::AtomicU64;
+    ///
+    /// let counter: Counter<AtomicU64> = Counter::new("count_dracula", "I am Count von Count!").unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PromError`] if the given name doesn't follow the [prometheus metric name specification],
+    /// namely that the name must confirm to the regex `[a-zA-Z_:][a-zA-Z0-9_:]*`.
+    ///
+    /// [`Counter::with_labels`]: crate::Counter#with_labels
+    /// [text-based format]: https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format
+    /// [`PromError`]: crate::PromError
+    /// [prometheus metric name specification]: https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels
     pub fn new(name: impl Into<Cow<'static, str>>, help: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
             value: Atomic::new(),
@@ -52,7 +176,28 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
         })
     }
 
+    /// Set the labels of the current counter
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use prometheus_rs::{Counter, Label};
+    /// use std::sync::atomic::AtomicU64;
+    ///
+    /// let counter: Counter<AtomicU64> = Counter::new("count_dracula", "I am Count von Count!")
+    ///     .unwrap()
+    ///     .with_labels(vec![Label::new("your_label", "The label's value").unwrap()]);
+    ///
+    /// assert_eq!(counter.labels(), &[Label::new("your_label", "The label's value").unwrap()]);
+    /// ```
+    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
+        self.descriptor.labels = labels.into();
+        self
+    }
+
     /// Increment the current counter by 1
+    ///
+    /// # Examples
     ///
     /// ```rust
     /// use prometheus_rs::Counter;
@@ -68,6 +213,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
 
     /// Increment the current counter by `inc`
     ///
+    /// # Examples
+    ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
@@ -82,6 +229,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
 
     /// Get the value of the current counter
     ///
+    /// # Examples
+    ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
@@ -95,6 +244,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
     }
 
     /// Reset the current counter's value to 0
+    ///
+    /// # Examples
     ///
     /// ```rust
     /// use prometheus_rs::Counter;
@@ -112,6 +263,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
 
     /// Set the current counter's value to `val`
     ///
+    /// # Examples
+    ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
@@ -126,6 +279,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
 
     /// Get the current counter's name
     ///
+    /// # Examples
+    ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
@@ -139,6 +294,8 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
 
     /// Get the current counter's help
     ///
+    /// # Examples
+    ///
     /// ```rust
     /// use prometheus_rs::Counter;
     /// use std::sync::atomic::AtomicU64;
@@ -150,18 +307,33 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
         &self.descriptor.help()
     }
 
+    /// Get the labels of the current counter
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use prometheus_rs::{Counter, Label};
+    /// use std::sync::atomic::AtomicU64;
+    ///
+    /// let counter: Counter<AtomicU64> = Counter::new("count_dracula", "I am Count von Count!")
+    ///     .unwrap()
+    ///     .with_labels(vec![Label::new("your_label", "The label's value").unwrap()]);
+    ///
+    /// assert_eq!(counter.labels(), &[Label::new("your_label", "The label's value").unwrap()]);
+    /// ```
     pub fn labels(&self) -> &[Label] {
         &self.descriptor.labels()
-    }
-
-    /// Set the labels of the current counter
-    pub fn with_labels(mut self, labels: impl Into<Vec<Label>>) -> Self {
-        self.descriptor.labels = labels.into();
-        self
     }
 }
 
 impl<Atomic: AtomicNum> Collectable for &'static Counter<Atomic> {
+    /// Encodes a `Counter` into the following format
+    ///
+    /// ```text
+    /// # HELP {{ name }} {{ help }}
+    /// # TYPE {{ name }} counter
+    /// {{ name }}{ labels } {{ value }}
+    /// ```
     fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
         writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
         writeln!(buf, "# TYPE {} counter", self.name())?;

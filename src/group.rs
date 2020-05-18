@@ -19,7 +19,7 @@ where
     K: Key,
     Atomic: AtomicNum,
 {
-    pub fn new<N, H, V>(name: N, help: H, keys: V) -> Result<Self>
+    pub fn new<N, H, V>(group_name: N, group_help: H, keys: V) -> Result<Self>
     where
         N: Into<Cow<'static, str>>,
         H: AsRef<str>,
@@ -30,7 +30,7 @@ where
             group: Group::new(HashMap::from_iter(
                 keys.zip(iter::from_fn(|| Some(Atomic::new()))),
             )),
-            descriptor: Descriptor::new(name, help, Vec::new())?,
+            descriptor: Descriptor::new(group_name, group_help, Vec::new())?,
         })
     }
 
@@ -53,10 +53,13 @@ where
     pub fn try_get(&self, key: K) -> Option<Atomic::Type> {
         self.group.try_get(key).map(|a| a.get())
     }
+
+    pub fn clear(&self, key: K) {
+        self.group.get(key).clear();
+    }
 }
 
 #[derive(Debug)]
-#[repr(transparent)]
 pub struct Group<T, K: Key> {
     metrics: HashMap<K, T, FxBuildHasher>,
 }
@@ -81,7 +84,7 @@ pub trait Key: Hash + Eq {
     fn key_name<'a>(&'a self) -> Cow<'a, str>;
 }
 
-impl Key for str {
+impl Key for &str {
     fn key_name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(self)
     }
@@ -137,5 +140,27 @@ mod tests {
 
         group.inc(GroupKey::A);
         assert_eq!(group.get(GroupKey::A), 1)
+    }
+
+    #[test]
+    fn counter_group_strings() {
+        let group: CounterGroup<&'static str> = CounterGroup::new(
+            "counters",
+            "A group of counters",
+            vec![
+                "key_one",
+                "key_two",
+                "key_three",
+                "key_four",
+                "key_five",
+                "key_six",
+                "key_seven",
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+
+        group.inc("key_one");
+        assert_eq!(group.get("key_one"), 1)
     }
 }

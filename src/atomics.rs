@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Write},
     ops,
-    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    sync::atomic::{self, AtomicI64, AtomicU64, Ordering},
 };
 
 #[derive(Debug)]
@@ -28,6 +28,8 @@ impl AtomicF64 {
             if self.0.compare_and_swap(current, f64::to_bits(new), order) == current {
                 break new;
             }
+
+            atomic::spin_loop_hint();
         }
     }
 
@@ -40,6 +42,8 @@ impl AtomicF64 {
             if self.0.compare_and_swap(current, f64::to_bits(new), order) == current {
                 break new;
             }
+
+            atomic::spin_loop_hint();
         }
     }
 
@@ -51,6 +55,8 @@ impl AtomicF64 {
             if self.0.compare_and_swap(current, f64::to_bits(val), order) == current {
                 break;
             }
+
+            atomic::spin_loop_hint();
         }
     }
 
