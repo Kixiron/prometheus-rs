@@ -1,6 +1,7 @@
 use crate::{
     atomics::AtomicNum,
     error::{PromError, PromErrorKind, Result},
+    histogram::HistogramCore,
     label::{valid_label_name, Label},
     registry::{Collectable, Descriptor},
 };
@@ -165,6 +166,159 @@ impl<K: Key, Atomic: AtomicNum> Collectable for &CounterGroup<K, Atomic> {
     }
 }
 
+#[derive(Debug)]
+pub struct HistogramGroup<K: Key, Atomic: AtomicNum = AtomicU64> {
+    group: Group<HistogramCore<Atomic>, K>,
+    descriptor: Descriptor,
+    bucket_label: Cow<'static, str>,
+}
+
+impl<K, Atomic> HistogramGroup<K, Atomic>
+where
+    K: Key,
+    Atomic: AtomicNum,
+{
+    pub fn new<N, H, L, V, B>(
+        group_name: N,
+        group_help: H,
+        bucket_label: L,
+        keys: V,
+        buckets: B,
+    ) -> Result<Self>
+    where
+        N: Into<Cow<'static, str>>,
+        H: AsRef<str>,
+        L: Into<Cow<'static, str>>,
+        V: Iterator<Item = K>,
+        B: Iterator<Item = Atomic::Type>,
+    {
+        let bucket_label = bucket_label.into();
+        if !valid_label_name(&bucket_label) {
+            return Err(PromError::new(
+                "Label name contains invalid characters",
+                PromErrorKind::InvalidLabelName,
+            ));
+        }
+
+        let buckets: Vec<Atomic::Type> = buckets.collect();
+
+        // TODO: Check for duplicates
+        Ok(Self {
+            group: Group::new(HashMap::from_iter(
+                keys.zip(iter::from_fn(|| Some(HistogramCore::new(buckets.clone())))),
+            )),
+            descriptor: Descriptor::new(group_name, group_help, Vec::new())?,
+            bucket_label,
+        })
+    }
+
+    pub fn get(&self, key: K) -> &HistogramCore<Atomic> {
+        self.group.get(key)
+    }
+
+    pub fn try_get(&self, key: K) -> Option<&HistogramCore<Atomic>> {
+        self.group.try_get(key)
+    }
+
+    pub fn clear(&self, key: K) {
+        self.group.get(key).clear();
+    }
+
+    pub fn name(&self) -> &str {
+        self.descriptor.name()
+    }
+
+    pub fn help(&self) -> &str {
+        self.descriptor.help()
+    }
+
+    pub fn labels(&self) -> &[Label] {
+        self.descriptor.labels()
+    }
+}
+
+impl<K: Key, Atomic: AtomicNum> Collectable for &HistogramGroup<K, Atomic> {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
+        writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
+        writeln!(buf, "# TYPE {} histogram", self.name())?;
+
+        let row = |buf: &mut String, name, bucket: &str| -> Result<()> {
+            write!(
+                buf,
+                "{}_{}{{{}={:?}",
+                self.name(),
+                name,
+                self.bucket_label,
+                bucket,
+            )?;
+
+            if !self.labels().is_empty() {
+                let mut labels = self.labels().iter();
+                let last = labels.next_back();
+
+                for label in labels {
+                    write!(buf, ",{}={:?}", label.name(), label.value())?;
+                }
+
+                if let Some(last) = last {
+                    write!(buf, "{}={:?}", last.name(), last.value())?;
+                }
+            }
+
+            write!(buf, "}} ")?;
+
+            Ok(())
+        };
+
+        for (bucket, histogram) in self.group.metrics.iter() {
+            let bucket_name = bucket.key_name();
+
+            row(buf, "sum", &bucket_name)?;
+            Atomic::format(histogram.get_sum(), buf, false)?;
+            writeln!(buf)?;
+
+            row(buf, "count", &bucket_name)?;
+            <AtomicU64 as AtomicNum>::format(histogram.get_count(), buf, false)?;
+            writeln!(buf)?;
+
+            for (i, bucket) in histogram.buckets.iter().enumerate() {
+                write!(
+                    buf,
+                    "{}_bucket{{{}={:?},le=",
+                    self.name(),
+                    self.bucket_label,
+                    &bucket_name,
+                )?;
+                Atomic::format(*bucket, buf, true)?;
+
+                if !self.labels().is_empty() {
+                    let mut labels = self.labels().iter();
+                    let last = labels.next_back();
+
+                    for label in labels {
+                        write!(buf, ",{}={:?}", label.name(), label.value())?;
+                    }
+
+                    if let Some(last) = last {
+                        write!(buf, "{}={:?}", last.name(), last.value())?;
+                    }
+                }
+
+                write!(buf, "}} ")?;
+
+                Atomic::format(histogram.values[i].get(), buf, false)?;
+                writeln!(buf)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +393,27 @@ mod tests {
 
         group.inc("key_one");
         assert_eq!(group.get("key_one"), 1);
+    }
+
+    #[test]
+    fn histogram_group() {
+        let group: HistogramGroup<&'static str> = HistogramGroup::new(
+            "histogram_group",
+            "It's a group of histograms",
+            "histogram_bucket",
+            vec!["bucket1", "bucket2", "bucket3", "bucket4"].into_iter(),
+            vec![1u64, 2, 3, 4].into_iter(),
+        )
+        .unwrap();
+
+        group.get("bucket1").observe(4);
+        group.get("bucket2").observe(3);
+        group.get("bucket3").observe(2);
+        group.get("bucket4").observe(1);
+
+        assert_eq!(group.get("bucket1").values(), vec![0, 0, 0, 1]);
+        assert_eq!(group.get("bucket2").values(), vec![0, 0, 1, 0]);
+        assert_eq!(group.get("bucket3").values(), vec![0, 1, 0, 0]);
+        assert_eq!(group.get("bucket4").values(), vec![1, 0, 0, 0]);
     }
 }

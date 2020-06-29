@@ -110,27 +110,32 @@ impl<Atomic: AtomicNum> HistogramBuilder<Atomic> {
         } else {
             Ok(Histogram {
                 descriptor: Descriptor::new(name, help, labels)?,
-                values: iter::from_fn(|| Some(Atomic::new()))
-                    .take(buckets.len())
-                    .collect(),
-                buckets,
-                count: AtomicU64::new(0),
-                sum: Atomic::new(),
+                core: HistogramCore::new(buckets),
             })
         }
     }
 }
 
 #[derive(Debug)]
-pub struct Histogram<Atomic: AtomicNum = AtomicF64> {
-    descriptor: Descriptor,
-    buckets: Vec<Atomic::Type>,
-    values: Vec<Atomic>,
+pub struct HistogramCore<Atomic: AtomicNum> {
+    pub(crate) buckets: Vec<Atomic::Type>,
+    pub(crate) values: Vec<Atomic>,
     count: AtomicU64,
     sum: Atomic,
 }
 
-impl<Atomic: AtomicNum> Histogram<Atomic> {
+impl<Atomic: AtomicNum> HistogramCore<Atomic> {
+    pub(crate) fn new(buckets: Vec<Atomic::Type>) -> Self {
+        Self {
+            values: iter::from_fn(|| Some(Atomic::new()))
+                .take(buckets.len())
+                .collect(),
+            buckets,
+            count: AtomicU64::new(0),
+            sum: Atomic::new(),
+        }
+    }
+
     pub fn observe(&self, val: Atomic::Type) {
         if let Some(idx) = self.buckets.iter().position(|b| val <= *b) {
             self.values[idx].inc();
@@ -157,6 +162,53 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
         self.sum.get()
     }
 
+    pub fn observe_bucket(&self, val: Atomic::Type, bucket: Atomic::Type) -> Result<()> {
+        if let Some(idx) = self.buckets.iter().position(|b| val <= *b) {
+            self.values[idx].inc();
+            self.count.inc();
+            self.sum.inc_by(val);
+
+            Ok(())
+        } else {
+            Err(PromError::new(
+                format!("The bucket {:?} doesn't exist", bucket),
+                PromErrorKind::BucketNotFound,
+            ))
+        }
+    }
+
+    pub fn buckets(&self) -> &[Atomic::Type] {
+        &self.buckets
+    }
+
+    pub fn values(&self) -> Vec<Atomic::Type> {
+        self.values.iter().map(|v| v.get()).collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct Histogram<Atomic: AtomicNum = AtomicF64> {
+    descriptor: Descriptor,
+    core: HistogramCore<Atomic>,
+}
+
+impl<Atomic: AtomicNum> Histogram<Atomic> {
+    pub fn observe(&self, val: Atomic::Type) {
+        self.core.observe(val)
+    }
+
+    pub fn clear(&self) {
+        self.core.clear()
+    }
+
+    pub fn get_count(&self) -> u64 {
+        self.core.get_count()
+    }
+
+    pub fn get_sum(&self) -> Atomic::Type {
+        self.core.get_sum()
+    }
+
     pub fn start_timer<'a>(&'a self) -> Timer<'a, Self> {
         Timer::new(self)
     }
@@ -178,22 +230,11 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
     }
 
     pub fn buckets(&self) -> &[Atomic::Type] {
-        &self.buckets
+        self.core.buckets()
     }
 
     pub fn observe_bucket(&self, val: Atomic::Type, bucket: Atomic::Type) -> Result<()> {
-        if let Some(idx) = self.buckets.iter().position(|b| val <= *b) {
-            self.values[idx].inc();
-            self.count.inc();
-            self.sum.inc_by(val);
-
-            Ok(())
-        } else {
-            Err(PromError::new(
-                format!("The bucket {:?} doesn't exist", bucket),
-                PromErrorKind::BucketNotFound,
-            ))
-        }
+        self.core.observe_bucket(val, bucket)
     }
 }
 
@@ -228,14 +269,14 @@ impl<Atomic: AtomicNum> Collectable for &Histogram<Atomic> {
         };
 
         row(buf, "sum")?;
-        Atomic::format(self.sum.get(), buf, false)?;
+        Atomic::format(self.get_sum(), buf, false)?;
         writeln!(buf)?;
 
         row(buf, "count")?;
-        <AtomicU64 as AtomicNum>::format(self.count.get(), buf, false)?;
+        <AtomicU64 as AtomicNum>::format(self.get_count(), buf, false)?;
         writeln!(buf)?;
 
-        for (i, bucket) in self.buckets.iter().enumerate() {
+        for (i, bucket) in self.core.buckets.iter().enumerate() {
             write!(buf, "{}_bucket", self.name())?;
 
             if !self.labels().is_empty() {
@@ -252,7 +293,7 @@ impl<Atomic: AtomicNum> Collectable for &Histogram<Atomic> {
                 write!(buf, " ")?;
             }
 
-            Atomic::format(self.values[i].get(), buf, false)?;
+            Atomic::format(self.core.values[i].get(), buf, false)?;
             writeln!(buf)?;
         }
 
@@ -279,7 +320,7 @@ pub(crate) struct InnerLocalHist<'a, Atomic: AtomicNum> {
 
 impl<'a, Atomic: AtomicNum> InnerLocalHist<'a, Atomic> {
     pub(crate) fn observe(&mut self, val: Atomic::Type) {
-        if let Some(idx) = self.histogram.buckets.iter().position(|b| val <= *b) {
+        if let Some(idx) = self.histogram.core.buckets.iter().position(|b| val <= *b) {
             self.values[idx] += val;
         }
 
@@ -302,11 +343,11 @@ impl<'a, Atomic: AtomicNum> InnerLocalHist<'a, Atomic> {
         }
 
         for (i, val) in self.values.iter().enumerate() {
-            self.histogram.values[i].inc_by(*val);
+            self.histogram.core.values[i].inc_by(*val);
         }
 
-        self.histogram.count.inc_by(self.count);
-        self.histogram.sum.inc_by(self.sum);
+        self.histogram.core.count.inc_by(self.count);
+        self.histogram.core.sum.inc_by(self.sum);
         self.clear();
     }
 }
@@ -316,7 +357,7 @@ impl<'a, Atomic: AtomicNum> LocalHistogram<'a, Atomic> {
         Self {
             inner: RefCell::new(InnerLocalHist {
                 histogram,
-                values: vec![Atomic::Type::default(); histogram.values.len()],
+                values: vec![Atomic::Type::default(); histogram.core.values.len()],
                 count: 0,
                 sum: Atomic::Type::default(),
             }),
