@@ -177,6 +177,10 @@ impl<Atomic: AtomicNum> HistogramCore<Atomic> {
         }
     }
 
+    pub fn local<'a>(&'a self) -> LocalHistogram<'a, Atomic> {
+        LocalHistogram::new(self)
+    }
+
     pub fn buckets(&self) -> &[Atomic::Type] {
         &self.buckets
     }
@@ -214,7 +218,7 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
     }
 
     pub fn local<'a>(&'a self) -> LocalHistogram<'a, Atomic> {
-        LocalHistogram::new(self)
+        self.core.local()
     }
 
     pub fn name(&self) -> &str {
@@ -310,54 +314,12 @@ pub struct LocalHistogram<'a, Atomic: AtomicNum> {
     pub(crate) inner: RefCell<InnerLocalHist<'a, Atomic>>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct InnerLocalHist<'a, Atomic: AtomicNum> {
-    histogram: &'a Histogram<Atomic>,
-    values: Vec<Atomic::Type>,
-    count: u64,
-    sum: Atomic::Type,
-}
-
-impl<'a, Atomic: AtomicNum> InnerLocalHist<'a, Atomic> {
-    pub(crate) fn observe(&mut self, val: Atomic::Type) {
-        if let Some(idx) = self.histogram.core.buckets.iter().position(|b| val <= *b) {
-            self.values[idx] += val;
-        }
-
-        self.count += 1;
-        self.sum += val;
-    }
-
-    pub(crate) fn clear(&mut self) {
-        for val in self.values.iter_mut() {
-            *val = Atomic::Type::default();
-        }
-
-        self.count = 0;
-        self.sum = Atomic::Type::default();
-    }
-
-    pub(crate) fn flush(&mut self) {
-        if self.count == 0 {
-            return;
-        }
-
-        for (i, val) in self.values.iter().enumerate() {
-            self.histogram.core.values[i].inc_by(*val);
-        }
-
-        self.histogram.core.count.inc_by(self.count);
-        self.histogram.core.sum.inc_by(self.sum);
-        self.clear();
-    }
-}
-
 impl<'a, Atomic: AtomicNum> LocalHistogram<'a, Atomic> {
-    pub(crate) fn new(histogram: &'a Histogram<Atomic>) -> Self {
+    pub(crate) fn new(histogram: &'a HistogramCore<Atomic>) -> Self {
         Self {
             inner: RefCell::new(InnerLocalHist {
                 histogram,
-                values: vec![Atomic::Type::default(); histogram.core.values.len()],
+                values: vec![Atomic::Type::default(); histogram.values.len()],
                 count: 0,
                 sum: Atomic::Type::default(),
             }),
@@ -386,6 +348,48 @@ impl<'a, Atomic: AtomicNum> LocalHistogram<'a, Atomic> {
 
     pub fn start_timer<'b>(&'b self) -> Timer<'b, Self> {
         Timer::new(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InnerLocalHist<'a, Atomic: AtomicNum> {
+    histogram: &'a HistogramCore<Atomic>,
+    values: Vec<Atomic::Type>,
+    count: u64,
+    sum: Atomic::Type,
+}
+
+impl<'a, Atomic: AtomicNum> InnerLocalHist<'a, Atomic> {
+    pub(crate) fn observe(&mut self, val: Atomic::Type) {
+        if let Some(idx) = self.histogram.buckets.iter().position(|b| val <= *b) {
+            self.values[idx] += val;
+        }
+
+        self.count += 1;
+        self.sum += val;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for val in self.values.iter_mut() {
+            *val = Atomic::Type::default();
+        }
+
+        self.count = 0;
+        self.sum = Atomic::Type::default();
+    }
+
+    pub(crate) fn flush(&mut self) {
+        if self.count == 0 {
+            return;
+        }
+
+        for (i, val) in self.values.iter().enumerate() {
+            self.histogram.values[i].inc_by(*val);
+        }
+
+        self.histogram.count.inc_by(self.count);
+        self.histogram.sum.inc_by(self.sum);
+        self.clear();
     }
 }
 
