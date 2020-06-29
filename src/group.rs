@@ -1,17 +1,58 @@
-use crate::{atomics::AtomicNum, error::Result, registry::Descriptor};
-use fxhash::FxBuildHasher;
+use crate::{
+    atomics::AtomicNum,
+    error::{PromError, PromErrorKind, Result},
+    label::{valid_label_name, Label},
+    registry::{Collectable, Descriptor},
+};
 use std::{
     borrow::Cow,
     collections::HashMap,
+    fmt::Write,
     hash::Hash,
     iter::{self, FromIterator},
     sync::atomic::AtomicU64,
 };
 
+// TODO: Optional fast hashers like fnv and fxhash
+#[derive(Debug)]
+pub struct Group<T, K: Key> {
+    metrics: HashMap<K, T>,
+}
+
+impl<T, K: Key> Group<T, K> {
+    pub(crate) fn new(metrics: HashMap<K, T>) -> Self {
+        Self { metrics }
+    }
+
+    pub fn get(&self, key: K) -> &T {
+        self.metrics
+            .get(&key)
+            .unwrap_or_else(|| panic!("The key value {} doesn't exist", key.key_name()))
+    }
+
+    pub fn try_get(&self, key: K) -> Option<&T> {
+        self.metrics.get(&key)
+    }
+}
+
+pub trait Key: Hash + Eq {
+    fn key_name<'a>(&'a self) -> Cow<'a, str>;
+}
+
+impl<T> Key for T
+where
+    T: AsRef<str> + Hash + Eq,
+{
+    fn key_name<'a>(&'a self) -> Cow<'a, str> {
+        Cow::Borrowed(self.as_ref())
+    }
+}
+
 #[derive(Debug)]
 pub struct CounterGroup<K: Key, Atomic: AtomicNum = AtomicU64> {
     group: Group<Atomic, K>,
     descriptor: Descriptor,
+    bucket_label: Cow<'static, str>,
 }
 
 impl<K, Atomic> CounterGroup<K, Atomic>
@@ -19,18 +60,28 @@ where
     K: Key,
     Atomic: AtomicNum,
 {
-    pub fn new<N, H, V>(group_name: N, group_help: H, keys: V) -> Result<Self>
+    pub fn new<N, H, L, V>(group_name: N, group_help: H, bucket_label: L, keys: V) -> Result<Self>
     where
         N: Into<Cow<'static, str>>,
         H: AsRef<str>,
+        L: Into<Cow<'static, str>>,
         V: Iterator<Item = K>,
     {
+        let bucket_label = bucket_label.into();
+        if !valid_label_name(&bucket_label) {
+            return Err(PromError::new(
+                "Label name contains invalid characters",
+                PromErrorKind::InvalidLabelName,
+            ));
+        }
+
         // TODO: Check for duplicates
         Ok(Self {
             group: Group::new(HashMap::from_iter(
                 keys.zip(iter::from_fn(|| Some(Atomic::new()))),
             )),
             descriptor: Descriptor::new(group_name, group_help, Vec::new())?,
+            bucket_label,
         })
     }
 
@@ -57,36 +108,60 @@ where
     pub fn clear(&self, key: K) {
         self.group.get(key).clear();
     }
-}
 
-#[derive(Debug)]
-pub struct Group<T, K: Key> {
-    metrics: HashMap<K, T, FxBuildHasher>,
-}
-
-impl<T, K: Key> Group<T, K> {
-    pub(crate) fn new(metrics: HashMap<K, T, FxBuildHasher>) -> Self {
-        Self { metrics }
+    pub fn name(&self) -> &str {
+        self.descriptor.name()
     }
 
-    pub fn get(&self, key: K) -> &T {
-        self.metrics
-            .get(&key)
-            .unwrap_or_else(|| panic!("The key value {} doesn't exist", key.key_name()))
+    pub fn help(&self) -> &str {
+        self.descriptor.help()
     }
 
-    pub fn try_get(&self, key: K) -> Option<&T> {
-        self.metrics.get(&key)
+    pub fn labels(&self) -> &[Label] {
+        self.descriptor.labels()
     }
 }
 
-pub trait Key: Hash + Eq {
-    fn key_name<'a>(&'a self) -> Cow<'a, str>;
-}
+impl<K: Key, Atomic: AtomicNum> Collectable for &CounterGroup<K, Atomic> {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
+        writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
+        writeln!(buf, "# TYPE {} counter", self.name())?;
 
-impl Key for &str {
-    fn key_name<'a>(&'a self) -> Cow<'a, str> {
-        Cow::Borrowed(self)
+        for (bucket, value) in self.group.metrics.iter() {
+            write!(
+                buf,
+                "{}{{{}={:?}",
+                self.name(),
+                self.bucket_label,
+                bucket.key_name()
+            )?;
+
+            if !self.labels().is_empty() {
+                write!(buf, ",")?;
+
+                let mut labels = self.labels().iter();
+                let last = labels.next_back();
+
+                for label in labels {
+                    write!(buf, "{}={:?},", label.name(), label.value())?;
+                }
+
+                if let Some(last) = last {
+                    write!(buf, "{}={:?}", last.name(), last.value())?;
+                }
+            }
+
+            write!(buf, "}} ")?;
+
+            <Atomic as AtomicNum>::format(value.get(), buf, false)?;
+            writeln!(buf)?;
+        }
+
+        Ok(())
+    }
+
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -125,6 +200,7 @@ mod tests {
         let group: CounterGroup<GroupKey> = CounterGroup::new(
             "counters",
             "A group of counters",
+            "group_key",
             vec![
                 GroupKey::A,
                 GroupKey::B,
@@ -139,7 +215,7 @@ mod tests {
         .unwrap();
 
         group.inc(GroupKey::A);
-        assert_eq!(group.get(GroupKey::A), 1)
+        assert_eq!(group.get(GroupKey::A), 1);
     }
 
     #[test]
@@ -147,6 +223,7 @@ mod tests {
         let group: CounterGroup<&'static str> = CounterGroup::new(
             "counters",
             "A group of counters",
+            "this_is_the_key",
             vec![
                 "key_one",
                 "key_two",
@@ -161,6 +238,6 @@ mod tests {
         .unwrap();
 
         group.inc("key_one");
-        assert_eq!(group.get("key_one"), 1)
+        assert_eq!(group.get("key_one"), 1);
     }
 }

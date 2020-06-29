@@ -37,7 +37,7 @@ use crate::{
 };
 use std::{
     borrow::Cow,
-    fmt::{self, Write},
+    fmt::Write,
     sync::atomic::{AtomicI64, AtomicU64},
 };
 
@@ -163,7 +163,7 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
     /// # Errors
     ///
     /// Returns a [`PromError`] if the given name doesn't follow the [prometheus metric name specification],
-    /// namely that the name must confirm to the regex `[a-zA-Z_:][a-zA-Z0-9_:]*`.
+    /// namely that the name must confirm to the regex `[a-zA-Z_:][a-zA-Z0-9_:]*` and is not empty
     ///
     /// [`Counter::with_labels`]: crate::Counter#with_labels
     /// [text-based format]: https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format
@@ -326,7 +326,7 @@ impl<Atomic: AtomicNum> Counter<Atomic> {
     }
 }
 
-impl<Atomic: AtomicNum> Collectable for &'static Counter<Atomic> {
+impl<Atomic: AtomicNum> Collectable for &Counter<Atomic> {
     /// Encodes a `Counter` into the following format
     ///
     /// ```text
@@ -334,7 +334,7 @@ impl<Atomic: AtomicNum> Collectable for &'static Counter<Atomic> {
     /// # TYPE {{ name }} counter
     /// {{ name }}{ labels } {{ value }}
     /// ```
-    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
         writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
         writeln!(buf, "# TYPE {} counter", self.name())?;
 

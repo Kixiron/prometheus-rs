@@ -33,6 +33,12 @@ impl fmt::Display for PromError {
 
 impl Error for PromError {}
 
+impl From<fmt::Error> for PromError {
+    fn from(err: fmt::Error) -> Self {
+        Self::new(err.to_string(), PromErrorKind::FormattingError)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PromErrorKind {
     IncrementNegative,
@@ -41,4 +47,5 @@ pub enum PromErrorKind {
     MissingComponent,
     BucketNotFound,
     DuplicatedCollector,
+    FormattingError,
 }

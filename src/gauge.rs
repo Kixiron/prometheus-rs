@@ -7,7 +7,7 @@ use crate::{
 };
 use std::{
     borrow::Cow,
-    fmt::{self, Write},
+    fmt::Write,
     sync::atomic::{AtomicI64, AtomicU64},
     time::{Instant, SystemTime},
 };
@@ -99,7 +99,7 @@ impl<Atomic: AtomicNum> Gauge<Atomic> {
 }
 
 impl<Atomic: AtomicNum> Collectable for &Gauge<Atomic> {
-    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
         writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
         writeln!(buf, "# TYPE {} gauge", self.name())?;
 

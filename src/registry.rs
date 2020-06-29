@@ -99,7 +99,7 @@ impl Registry {
         metrics
     }
 
-    pub fn collect_to_string(&self) -> std::result::Result<String, fmt::Error> {
+    pub fn collect_to_string(&self) -> Result<String> {
         let mut buf = String::new();
         for input in self.inputs.iter() {
             input.encode_text(&mut buf)?;
@@ -147,7 +147,7 @@ impl<'a> Metric<'a> {
         }
     }
 
-    pub fn encode_text(&self, buf: &mut String) -> fmt::Result {
+    pub fn encode_text(&self, buf: &mut String) -> Result<()> {
         self.value.encode_text(buf)
     }
 }
@@ -163,7 +163,7 @@ impl fmt::Debug for Metric<'_> {
 }
 
 pub trait Collectable {
-    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result;
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()>;
     fn descriptor(&self) -> &Descriptor;
 }
 
@@ -171,7 +171,7 @@ impl<T> Collectable for T
 where
     T: AsRef<dyn Collectable>,
 {
-    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
         self.as_ref().encode_text(buf)
     }
 

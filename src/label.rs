@@ -4,7 +4,7 @@ use std::{borrow::Cow, convert::TryFrom};
 /// Label names follow the regex `[a-zA-Z_][a-zA-Z0-9_]*` with the exception that labels starting with `__` are reserved,
 /// as well as the label name `le`
 // TODO: Make this const when rust/#68983 and rust/#49146 land
-fn valid_label_name(label: &str) -> bool {
+pub(crate) fn valid_label_name(label: &str) -> bool {
     let mut chars = label.chars();
 
     !label.is_empty()

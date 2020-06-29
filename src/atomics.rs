@@ -157,6 +157,7 @@ impl_atomic! {
             write!(f, "{:?}", int)
         }
     },
+
     AtomicI64 := AtomicI64::new(0) => i64 = |f, int, quotes| {
         if quotes {
             write!(f, "\"{:?}\"", int)
@@ -164,6 +165,7 @@ impl_atomic! {
             write!(f, "{:?}", int)
         }
     },
+
     AtomicF64 := AtomicF64::zeroed() => f64 = |f, int, quotes| {
         if quotes {
             match int {

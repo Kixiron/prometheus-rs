@@ -5,13 +5,7 @@ use crate::{
     registry::{Collectable, Descriptor},
     timer::Timer,
 };
-use std::{
-    borrow::Cow,
-    cell::RefCell,
-    fmt::{self, Write},
-    iter,
-    sync::atomic::AtomicU64,
-};
+use std::{borrow::Cow, cell::RefCell, fmt::Write, iter, sync::atomic::AtomicU64};
 
 /// The default [`Histogram`] buckets. Meant to measure the response time in seconds of network operations
 pub const DEFAULT_BUCKETS: &[f64; 12] = &[
@@ -204,23 +198,26 @@ impl<Atomic: AtomicNum> Histogram<Atomic> {
 }
 
 impl<Atomic: AtomicNum> Collectable for &Histogram<Atomic> {
-    fn encode_text<'a>(&'a self, buf: &mut String) -> fmt::Result {
+    fn encode_text<'a>(&'a self, buf: &mut String) -> Result<()> {
         writeln!(buf, "# HELP {} {}", self.name(), self.help())?;
         writeln!(buf, "# TYPE {} histogram", self.name())?;
 
-        let row = |buf: &mut String, name| {
+        let row = |buf: &mut String, name| -> Result<()> {
             write!(buf, "{}_{}", self.name(), name)?;
+
             if !self.labels().is_empty() {
                 write!(buf, "{{")?;
 
-                let (last, labels) = self
-                    .labels()
-                    .split_last()
-                    .expect("There is at least 1 label");
+                let mut labels = self.labels().iter();
+                let last = labels.next_back();
+
                 for label in labels {
                     write!(buf, "{}={:?},", label.name(), label.value())?;
                 }
-                write!(buf, "{}={:?}", last.name(), last.value())?;
+
+                if let Some(last) = last {
+                    write!(buf, "{}={:?}", last.name(), last.value())?;
+                }
 
                 write!(buf, "}} ")?;
             } else {
@@ -361,8 +358,8 @@ mod tests {
             .name("some_histogram")
             .help("It hist's grams")
             .with_buckets(vec![-1.0, -0.0, 0.0, 1.0])
-            .with_labels(vec![Label::new("label", "value").unwrap()])
-            .label(Label::new("name", "value").unwrap())
+            .with_labels(vec![Label::new("some_random_label", "whee").unwrap()])
+            .label(Label::new("another_label", "I ran out of ideas").unwrap())
             .build()
             .unwrap();
 
@@ -372,8 +369,8 @@ mod tests {
         assert_eq!(
             built.labels(),
             &[
-                Label::new("label", "value").unwrap(),
-                Label::new("name", "value").unwrap()
+                Label::new("some_random_label", "whee").unwrap(),
+                Label::new("another_label", "I ran out of ideas").unwrap()
             ]
         );
     }
