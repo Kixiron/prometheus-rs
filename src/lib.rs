@@ -21,7 +21,7 @@ pub use atomics::AtomicF64;
 pub use counter::Counter;
 pub use error::{PromError, PromErrorKind};
 pub use gauge::Gauge;
-pub use group::{CounterGroup, Group, Key};
+pub use group::{CounterGroup, Group, HistogramGroup, Key};
 pub use label::Label;
 pub use registry::{Registry, RegistryBuilder};
 pub use timer::Timer;
